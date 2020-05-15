@@ -18,7 +18,7 @@ model = WaveNetModel(layers=2,
                      output_length=16,
                      bias=True)
 
-print("model: ", model)
+#print("model: ", model)
 print("scope: ", model.receptive_field)
 
 def delete_folder(pth) :
@@ -29,7 +29,8 @@ def delete_folder(pth) :
                 sub.unlink()
     pth.rmdir()
 test_folder = Path(__file__).parent / 'test_output'
-delete_folder(test_folder)
+if test_folder.exists():
+    delete_folder(test_folder)
 test_folder.mkdir()
 in_path = Path(__file__).parents[1] / 'train_samples'
 out_path = Path(__file__).parents[1] / 'train_samples/test_dataset.npz'
@@ -38,7 +39,7 @@ dataset = WavenetDataset(
     item_length=model.receptive_field + model.output_length - 1,
     target_length=model.output_length,
     file_location=str(in_path),
-    test_stride=500)
+    test_stride=300)
 
 print('Length dataset', len(dataset))
 
@@ -54,9 +55,9 @@ def generate_and_log_samples(step):
     print("audio clips generated")
 
 
-logger = TensorboardLogger(log_interval=1000,
-                           validation_interval=2000,
-                           generate_interval=3000,
+logger = TensorboardLogger(log_interval=200,
+                           validation_interval=200,
+                           generate_interval=200,
                            generate_function=generate_and_log_samples,
                            log_dir=str(test_folder / 'logs'))
                            
@@ -65,7 +66,7 @@ trainer = WavenetTrainer(model=model,
                          lr=0.001,
                          snapshot_path='snapshots',
                          snapshot_name='test_model',
-                         snapshot_interval=10000,
+                         snapshot_interval=100,
                          logger=logger
                          )
 print('start training...')

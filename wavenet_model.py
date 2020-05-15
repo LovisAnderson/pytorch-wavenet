@@ -4,6 +4,7 @@ import time
 from wavenet_modules import *
 from audio_data import *
 from wavenet_training import get_default_device
+import torch
 
 
 class WaveNetModel(nn.Module):
@@ -187,46 +188,6 @@ class WaveNetModel(nn.Module):
         x = x.transpose(1, 2).contiguous()
         x = x.view(n * l, c)
         return x
-
-    def generate(self,
-                 num_samples,
-                 first_samples=None,
-                 temperature=1.):
-        raise DeprecationWarning("Function is deprecated. Use generate_fast")
-        self.eval()
-        if first_samples is None:
-            first_samples = torch.zeros(1)
-        generated = Variable(first_samples, volatile=True)
-
-        num_pad = self.receptive_field - generated.size(0)
-        if num_pad > 0:
-            generated = constant_pad_1d(generated, self.scope, pad_start=True)
-            print("pad zero")
-
-        for i in range(num_samples):
-            input = Variable(torch.FloatTensor(1, self.classes, self.receptive_field).zero_())
-            input = input.scatter_(1, generated[-self.receptive_field:].view(1, -1, self.receptive_field), 1.)
-
-            x = self.wavenet(input,
-                             dilation_func=self.wavenet_dilate)[:, :, -1].squeeze()
-
-            if temperature > 0:
-                x /= temperature
-                prob = F.softmax(x, dim=0)
-                prob = prob.cpu()
-                np_prob = prob.data.numpy()
-                x = np.random.choice(self.classes, p=np_prob)
-                x = Variable(torch.LongTensor([x]))#np.array([x])
-            else:
-                x = torch.max(x, 0)[1].float()
-
-            generated = torch.cat((generated, x), 0)
-
-        generated = (generated / self.classes) * 2. - 1
-        mu_gen = mu_law_expansion(generated, self.classes)
-
-        self.train()
-        return mu_gen
 
     def generate_fast(self,
                       num_samples,
