@@ -4,15 +4,12 @@ from audio_data import WavenetDataset
 from wavenet_training import *
 from model_logging import *
 from scipy.io import wavfile
+from pathlib import Path
 
-dtype = torch.FloatTensor
-ltype = torch.LongTensor
+TEST_FOLDER = Path(__file__).parent / 'train_samples/bowie'
+DATABASE_PATH = TEST_FOLDER / 'dataset.npz'
+LOG_DIR = Path(__file__).parent / 'logs/bowie'
 
-use_cuda = torch.cuda.is_available()
-if use_cuda:
-    print('use gpu')
-    dtype = torch.cuda.FloatTensor
-    ltype = torch.cuda.LongTensor
 
 model = WaveNetModel(layers=10,
                      blocks=3,
@@ -21,31 +18,26 @@ model = WaveNetModel(layers=10,
                      skip_channels=1024,
                      end_channels=512,
                      output_length=16,
-                     dtype=dtype,
                      bias=True)
 
-#model = load_latest_model_from('snapshots', use_cuda=True)
+model = load_latest_model_from('snapshots')
 #model = torch.load('snapshots/some_model')
-
-if use_cuda:
-    print("move model to gpu")
-    model.cuda()
 
 print('model: ', model)
 print('receptive field: ', model.receptive_field)
 print('parameter count: ', model.parameter_count())
 
-data = WavenetDataset(dataset_file='train_samples/bach_chaconne/dataset.npz',
+data = WavenetDataset(dataset_file=str(DATABASE_PATH),
                       item_length=model.receptive_field + model.output_length - 1,
                       target_length=model.output_length,
-                      file_location='train_samples/bach_chaconne',
+                      file_location=str(TEST_FOLDER),
                       test_stride=500)
 print('the dataset has ' + str(len(data)) + ' items')
 
 
 def generate_and_log_samples(step):
     sample_length=32000
-    gen_model = load_latest_model_from('snapshots', use_cuda=False)
+    gen_model = load_latest_model_from('snapshots')
     print("start generating...")
     samples = generate_audio(gen_model,
                              length=sample_length,
@@ -63,14 +55,14 @@ logger = TensorboardLogger(log_interval=200,
                            validation_interval=400,
                            generate_interval=800,
                            generate_function=generate_and_log_samples,
-                           log_dir="logs/chaconne_model")
+                           log_dir=str(LOG_DIR))
 
 trainer = WavenetTrainer(model=model,
                          dataset=data,
                          lr=0.0001,
                          weight_decay=0.0,
                          snapshot_path='snapshots',
-                         snapshot_name='chaconne_model',
+                         snapshot_name='bowie_model',
                          snapshot_interval=1000,
                          logger=logger)
 
