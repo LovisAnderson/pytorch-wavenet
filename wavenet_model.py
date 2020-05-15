@@ -3,6 +3,7 @@ import os.path
 import time
 from wavenet_modules import *
 from audio_data import *
+from wavenet_training import get_default_device
 
 
 class WaveNetModel(nn.Module):
@@ -35,7 +36,6 @@ class WaveNetModel(nn.Module):
                  classes=256,
                  output_length=32,
                  kernel_size=2,
-                 dtype=torch.FloatTensor,
                  bias=False):
 
         super(WaveNetModel, self).__init__()
@@ -47,7 +47,6 @@ class WaveNetModel(nn.Module):
         self.skip_channels = skip_channels
         self.classes = classes
         self.kernel_size = kernel_size
-        self.dtype = dtype
 
         # build model
         receptive_field = 1
@@ -77,8 +76,7 @@ class WaveNetModel(nn.Module):
                 # dilated queues for fast generation
                 self.dilated_queues.append(DilatedQueue(max_length=(kernel_size - 1) * new_dilation + 1,
                                                         num_channels=residual_channels,
-                                                        dilation=new_dilation,
-                                                        dtype=dtype))
+                                                        dilation=new_dilation))
 
                 # dilated convolutions
                 self.filter_convs.append(nn.Conv1d(in_channels=residual_channels,
@@ -122,7 +120,7 @@ class WaveNetModel(nn.Module):
         self.output_length = output_length
         self.receptive_field = receptive_field
 
-    def wavenet(self, input, dilation_func):
+    def wavenet(self, input, generate=False):
 
         x = self.start_conv(input)
         skip = 0
@@ -140,26 +138,22 @@ class WaveNetModel(nn.Module):
             # ---------------------------------------> + ------------->	*skip*
 
             (dilation, init_dilation) = self.dilations[i]
-
-            residual = dilation_func(x, dilation, init_dilation, i)
-
+            if not generate:
+                residual = self.wavenet_dilate(x, dilation, init_dilation, i)
+            else:
+                residual = self.queue_dilate(x, dilation, init_dilation, i)
             # dilated convolution
             filter = self.filter_convs[i](residual)
-            filter = F.tanh(filter)
+            filter = torch.tanh(filter)
             gate = self.gate_convs[i](residual)
-            gate = F.sigmoid(gate)
+            gate = torch.sigmoid(gate)
             x = filter * gate
 
             # parametrized skip connection
             s = x
             if x.size(2) != 1:
                  s = dilate(x, 1, init_dilation=dilation)
-            s = self.skip_convs[i](s)
-            try:
-                skip = skip[:, :, -s.size(2):]
-            except:
-                skip = 0
-            skip = s + skip
+            skip = self.skip_convs[i](s)
 
             x = self.residual_convs[i](x)
             x = x + residual[:, :, (self.kernel_size - 1):]
@@ -184,8 +178,7 @@ class WaveNetModel(nn.Module):
         return x
 
     def forward(self, input):
-        x = self.wavenet(input,
-                         dilation_func=self.wavenet_dilate)
+        x = self.wavenet(input)
 
         # reshape output
         [n, c, l] = x.size()
@@ -199,9 +192,10 @@ class WaveNetModel(nn.Module):
                  num_samples,
                  first_samples=None,
                  temperature=1.):
+        raise DeprecationWarning("Function is deprecated. Use generate_fast")
         self.eval()
         if first_samples is None:
-            first_samples = self.dtype(1).zero_()
+            first_samples = torch.zeros(1)
         generated = Variable(first_samples, volatile=True)
 
         num_pad = self.receptive_field - generated.size(0)
@@ -243,7 +237,7 @@ class WaveNetModel(nn.Module):
                       progress_interval=100):
         self.eval()
         if first_samples is None:
-            first_samples = torch.LongTensor(1).zero_() + (self.classes // 2)
+            first_samples = torch.zeros(1, dtype=torch.int64) + (self.classes // 2)
         first_samples = Variable(first_samples)
 
         # reset queues
@@ -253,13 +247,13 @@ class WaveNetModel(nn.Module):
         num_given_samples = first_samples.size(0)
         total_samples = num_given_samples + num_samples
 
-        input = Variable(torch.FloatTensor(1, self.classes, 1).zero_())
+        input = torch.zeros((1, self.classes, 1))
         input = input.scatter_(1, first_samples[0:1].view(1, -1, 1), 1.)
 
         # fill queues with given samples
         for i in range(num_given_samples - 1):
             x = self.wavenet(input,
-                             dilation_func=self.queue_dilate)
+                             generate=True)
             input.zero_()
             input = input.scatter_(1, first_samples[i + 1:i + 2].view(1, -1, 1), 1.).view(1, self.classes, 1)
 
@@ -275,7 +269,7 @@ class WaveNetModel(nn.Module):
         tic = time.time()
         for i in range(num_samples):
             x = self.wavenet(input,
-                             dilation_func=self.queue_dilate).squeeze()
+                             generate=True).squeeze()
 
             x -= regularizer
 
@@ -297,7 +291,7 @@ class WaveNetModel(nn.Module):
             generated = np.append(generated, o)
 
             # set new input
-            x = Variable(torch.from_numpy(x).type(torch.LongTensor))
+            x = torch.Tensor(x).to(dtype=torch.int64)
             input.zero_()
             input = input.scatter_(1, x.view(1, -1, 1), 1.).view(1, self.classes, 1)
 
@@ -320,27 +314,13 @@ class WaveNetModel(nn.Module):
         s = sum([np.prod(list(d.size())) for d in par])
         return s
 
-    def cpu(self, type=torch.FloatTensor):
-        self.dtype = type
-        for q in self.dilated_queues:
-            q.dtype = self.dtype
-        super().cpu()
 
-
-def load_latest_model_from(location, use_cuda=True):
+def load_latest_model_from(location):
+    device = get_default_device()
     files = [location + "/" + f for f in os.listdir(location)]
     newest_file = max(files, key=os.path.getctime)
     print("load model " + newest_file)
 
-    if use_cuda:
-        model = torch.load(newest_file)
-    else:
-        model = load_to_cpu(newest_file)
+    model = torch.load(newest_file, map_location=device)
 
-    return model
-
-
-def load_to_cpu(path):
-    model = torch.load(path, map_location=lambda storage, loc: storage)
-    model.cpu()
     return model

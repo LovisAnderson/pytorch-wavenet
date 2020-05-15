@@ -24,7 +24,7 @@ def dilate(x, dilation, init_dilation=1, pad_start=True):
     new_l = int(np.ceil(l / dilation_factor) * dilation_factor)
     if new_l != l:
         l = new_l
-        x = constant_pad_1d(x, new_l, dimension=2, pad_start=pad_start)
+        x = custom_padding(x, new_l, dimension=2, pad_start=pad_start)
 
     l_old = int(round(l / dilation_factor))
     n_old = int(round(n * dilation_factor))
@@ -40,7 +40,7 @@ def dilate(x, dilation, init_dilation=1, pad_start=True):
 
 
 class DilatedQueue:
-    def __init__(self, max_length, data=None, dilation=1, num_deq=1, num_channels=1, dtype=torch.FloatTensor):
+    def __init__(self, max_length, data=None, dilation=1, num_deq=1, num_channels=1):
         self.in_pos = 0
         self.out_pos = 0
         self.num_deq = num_deq
@@ -48,12 +48,11 @@ class DilatedQueue:
         self.dilation = dilation
         self.max_length = max_length
         self.data = data
-        self.dtype = dtype
         if data == None:
-            self.data = Variable(dtype(num_channels, max_length).zero_())
+            self.data = torch.zeros((num_channels, max_length))
 
     def enqueue(self, input):
-        self.data[:, self.in_pos] = input
+        self.data[:, self.in_pos] = input.squeeze()
         self.in_pos = (self.in_pos + 1) % self.max_length
 
     def dequeue(self, num_deq=1, dilation=1):
@@ -72,56 +71,30 @@ class DilatedQueue:
         return t
 
     def reset(self):
-        self.data = Variable(self.dtype(self.num_channels, self.max_length).zero_())
+        self.data = torch.zeros((self.num_channels, self.max_length))
         self.in_pos = 0
         self.out_pos = 0
 
 
-class ConstantPad1d(Function):
-    def __init__(self, target_size, dimension=0, value=0, pad_start=False):
-        super(ConstantPad1d, self).__init__()
-        self.target_size = target_size
-        self.dimension = dimension
-        self.value = value
-        self.pad_start = pad_start
+def custom_padding(
+    input,
+    target_size,
+    dimension=0,
+    value=0,
+    pad_start=False
+):
+    input_size = input.size()
 
-    def forward(self, input):
-        self.num_pad = self.target_size - input.size(self.dimension)
-        assert self.num_pad >= 0, 'target size has to be greater than input size'
+    size = list(input.size())
+    padding_size = target_size - size[dimension]
+    padding = [0]*(2*len(input_size))
+    index = 0 if pad_start else 1
+    if dimension == 0:
+        padding[4 + index] = padding_size
+    elif dimension == 1:
+        padding[2 + index] = padding_size
+    elif dimension==2:
+        padding[0 + index] = padding_size
+    pad = nn.ConstantPad3d(tuple(padding), value)
 
-        self.input_size = input.size()
-
-        size = list(input.size())
-        size[self.dimension] = self.target_size
-        output = input.new(*tuple(size)).fill_(self.value)
-        c_output = output
-
-        # crop output
-        if self.pad_start:
-            c_output = c_output.narrow(self.dimension, self.num_pad, c_output.size(self.dimension) - self.num_pad)
-        else:
-            c_output = c_output.narrow(self.dimension, 0, c_output.size(self.dimension) - self.num_pad)
-
-        c_output.copy_(input)
-        return output
-
-    def backward(self, grad_output):
-        grad_input = grad_output.new(*self.input_size).zero_()
-        cg_output = grad_output
-
-        # crop grad_output
-        if self.pad_start:
-            cg_output = cg_output.narrow(self.dimension, self.num_pad, cg_output.size(self.dimension) - self.num_pad)
-        else:
-            cg_output = cg_output.narrow(self.dimension, 0, cg_output.size(self.dimension) - self.num_pad)
-
-        grad_input.copy_(cg_output)
-        return grad_input
-
-
-def constant_pad_1d(input,
-                    target_size,
-                    dimension=0,
-                    value=0,
-                    pad_start=False):
-    return ConstantPad1d(target_size, dimension, value, pad_start)(input)
+    return pad(input)

@@ -1,41 +1,82 @@
 import time
-from wavenet_training import WaveNetModel, Optimizer, WaveNetData
+from wavenet_model import WaveNetModel, load_latest_model_from
+from model_logging import TensorboardLogger
+from wavenet_training import *
+from torch.autograd import Variable
 import torch
 import numpy as np
+from pathlib import Path
+from audio_data import *
 
-model = WaveNetModel(num_layers=10,
-                     num_blocks=2,
-                     num_classes=128,
-                     hidden_channels=64)
+sample_dir = Path(__file__).parents[1] / 'train_samples'
+model = WaveNetModel(layers=2,
+                     blocks=2,
+                     dilation_channels=2,
+                     residual_channels=2,
+                     skip_channels=2,
+                     end_channels=4, 
+                     output_length=16,
+                     bias=True)
 
 print("model: ", model)
-print("scope: ", model.scope)
-print("parameter count", model.parameter_count())
+print("scope: ", model.receptive_field)
 
-data = WaveNetData('../train_samples/violin.wav',
-                   input_length=model.scope,
-                   target_length=model.last_block_scope,
-                   num_classes=model.num_classes)
-start_tensor = data.get_minibatch([0])[0].squeeze()
+def delete_folder(pth) :
+    for sub in pth.iterdir() :
+        if sub.is_dir() :
+                delete_folder(sub)
+        else :
+                sub.unlink()
+    pth.rmdir()
+test_folder = Path(__file__).parent / 'test_output'
+delete_folder(test_folder)
+test_folder.mkdir()
+in_path = Path(__file__).parents[1] / 'train_samples'
+out_path = Path(__file__).parents[1] / 'train_samples/test_dataset.npz'
+dataset = WavenetDataset(
+    dataset_file=str(out_path),
+    item_length=model.receptive_field + model.output_length - 1,
+    target_length=model.output_length,
+    file_location=str(in_path),
+    test_stride=500)
 
-optimizer = Optimizer(model, mini_batch_size=1, avg_length=20)
+print('Length dataset', len(dataset))
 
+def generate_and_log_samples(step):
+    sample_length=320
+    gen_model = load_latest_model_from('snapshots')
+    print("start generating...")
+    samples = generate_audio(gen_model,
+                             length=sample_length,
+                             temperatures=[0.5])
+    
+    logger.audio_summary('temperature_0.5', samples, step, sr=16000)
+    print("audio clips generated")
+
+
+logger = TensorboardLogger(log_interval=1000,
+                           validation_interval=2000,
+                           generate_interval=3000,
+                           generate_function=generate_and_log_samples,
+                           log_dir=str(test_folder / 'logs'))
+                           
+trainer = WavenetTrainer(model=model,
+                         dataset=dataset,
+                         lr=0.001,
+                         snapshot_path='snapshots',
+                         snapshot_name='test_model',
+                         snapshot_interval=10000,
+                         logger=logger
+                         )
 print('start training...')
 tic = time.time()
-optimizer.train(data, epochs=100)
+
+trainer.train(batch_size=16,
+              epochs=2)
+
 toc = time.time()
 print('Training took {} seconds.'.format(toc - tic))
 
-torch.save(model.state_dict(), "../model_parameters/violin_10-2-128-164")
-
-print('generate...')
-tic = time.time()
-generated = model.generate(start_data=start_tensor, num_samples=100)
-toc = time.time()
-print('Generating took {} seconds.'.format(toc - tic))
-
-print('generate...')
-tic = time.time()
-generated = model.fast_generate(100)
-toc = time.time()
-print('Generating took {} seconds.'.format(toc - tic))
+generated = model.generate_fast(500)
+print(generated)
+delete_folder(test_folder)
