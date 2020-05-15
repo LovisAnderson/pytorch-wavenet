@@ -197,6 +197,7 @@ class WaveNetModel(nn.Module):
                       progress_callback=None,
                       progress_interval=100):
         self.eval()
+        self.to(device=torch.device('cpu'))
         if first_samples is None:
             first_samples = torch.zeros(1, dtype=torch.int64) + (self.classes // 2)
         first_samples = Variable(first_samples)
@@ -267,6 +268,7 @@ class WaveNetModel(nn.Module):
 
         self.train()
         mu_gen = mu_law_expansion(generated, self.classes)
+        self.to(device=get_default_device())
         return mu_gen
 
 
