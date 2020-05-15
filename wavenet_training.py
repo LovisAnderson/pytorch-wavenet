@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from model_logging import Logger
 from wavenet_modules import *
+import random
 
 
 def print_last_loss(opt):
@@ -60,6 +61,7 @@ class WavenetTrainer:
         self.model = model
         self.dataset = dataset
         self.dataloader = None
+        self.valid_dataloader = None
         self.lr = lr
         self.weight_decay = weight_decay
         self.clip = gradient_clipping
@@ -76,6 +78,7 @@ class WavenetTrainer:
               batch_size=32,
               epochs=10,
               continue_training_at_step=0):
+        print(f'Start Training on device {self.device}!')
         self.model.train()
         self.model.to(device=self.device)
         self.dataloader = torch.utils.data.DataLoader(self.dataset,
@@ -83,7 +86,11 @@ class WavenetTrainer:
                                                       shuffle=True,
                                                       num_workers=8,
                                                       pin_memory=False)
+
         self.dataloader = DeviceDataLoader(self.dataloader, self.device)
+
+        self.setup_valid_dataloader()
+
         step = continue_training_at_step
         for current_epoch in range(epochs):
             print("epoch", current_epoch)
@@ -114,6 +121,23 @@ class WavenetTrainer:
                     torch.save(self.model, self.snapshot_path + '/' + self.snapshot_name + '_' + time_string)
 
                 self.logger.log(step, loss)
+
+    def setup_valid_dataloader(self, nr_samples=100000):
+        # setup valid dataloader
+        if len(self.dataset) < nr_samples:
+            self.valid_dataset = self.dataset
+        else:
+            indices = random.sample(range(len(self.dataset)), nr_samples)
+            self.valid_dataset = torch.utils.data.Subset(self.dataset, indices)
+        self.valid_dataloader = DeviceDataLoader(
+            torch.utils.data.DataLoader(
+                self.dataset,
+                batch_size=1024,
+                shuffle=True,
+                num_workers=8,
+                pin_memory=False),
+            device=self.device
+        )
 
     def validate(self):
         self.model.eval()
